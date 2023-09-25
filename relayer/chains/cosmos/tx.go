@@ -863,7 +863,7 @@ func (cc *CosmosProvider) buildEvmMessages(
 		amount := big.NewInt(0)
 		input = addLengthPrefix(prefix, input)
 		tx := evmtypes.NewTx(chainID, nonce, &contractAddress, amount, gasLimit, gasFeeCap, gasPrice, gasTipCap, input, &ethtypes.AccessList{})
-		tx.From = from.String()
+		tx.From = from.Bytes()
 		if err := tx.ValidateBasic(); err != nil {
 			cc.log.Info("tx failed basic validation", zap.Error(err))
 			return nil, 0, sdk.Coins{}, err
@@ -881,7 +881,6 @@ func (cc *CosmosProvider) buildEvmMessages(
 			fees = fees.Add(sdk.NewCoin(gasPriceCoin.Denom, feeAmt))
 		}
 		txGasLimit += tx.GetGas()
-		tx.From = ""
 		cc.log.Info("append", zap.String("hash", tx.Hash))
 		txs = append(txs, tx)
 	}
