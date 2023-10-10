@@ -1,12 +1,16 @@
 package cosmos
 
 import (
+	sysbytes "bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"math/rand"
+	"net/http"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -50,6 +54,7 @@ import (
 	ethermintcodecs "github.com/cosmos/relayer/v2/relayer/codecs/ethermint"
 	"github.com/cosmos/relayer/v2/relayer/provider"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 	etherminttypes "github.com/evmos/ethermint/types"
@@ -157,6 +162,23 @@ func (cc *CosmosProvider) SendMessages(ctx context.Context, msgs []provider.Rela
 	}
 
 	return rlyResp, true, callbackErr
+}
+
+type jsonError struct {
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
+}
+
+// A value of this type can a JSON-RPC request, notification, successful response or
+// error response. Which one it is depends on the fields.
+type jsonrpcMessage struct {
+	Version string          `json:"jsonrpc,omitempty"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	Params  json.RawMessage `json:"params,omitempty"`
+	Error   *jsonError      `json:"error,omitempty"`
+	Result  hexutil.Uint    `json:"result,omitempty"`
 }
 
 // SendMessagesToMempool simulates and broadcasts a transaction with the given msgs and memo.
@@ -1901,6 +1923,9 @@ func (cc *CosmosProvider) PrepareFactory(txf tx.Factory, signingKey string) (tx.
 	if cc.PCfg.MinGasAmount != 0 {
 		txf = txf.WithGas(cc.PCfg.MinGasAmount)
 	}
+	if cc.PCfg.MaxGasAmount != 0 {
+		txf = txf.WithGas(cc.PCfg.MaxGasAmount)
+	}
 
 	txf, err = cc.SetWithExtensionOptions(txf)
 	if err != nil {
@@ -1952,8 +1977,98 @@ func (cc *CosmosProvider) SetWithExtensionOptions(txf tx.Factory) (tx.Factory, e
 	return txf.WithExtensionOptions(extOpts...), nil
 }
 
+func (cc *CosmosProvider) calculateEvmGas(ctx context.Context, args []*evmtypes.TransactionArgs) (uint64, error) {
+	params, err := json.Marshal(args)
+	if err != nil {
+		return 0, err
+	}
+	req := jsonrpcMessage{
+		Version: "2.0",
+		Method:  "eth_estimateGas",
+		Params:  params,
+		ID:      []byte("1"),
+	}
+	var buf sysbytes.Buffer
+	err = json.NewEncoder(&buf).Encode(req)
+	if err != nil {
+		return 0, err
+	}
+
+	var gas uint64
+	if err = retry.Do(func() error {
+		resp, err := http.Post("http://127.0.0.1:26701", "application/json", &buf)
+		if err != nil {
+			return err
+		}
+
+		defer resp.Body.Close()
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+		var res jsonrpcMessage
+		if err = json.Unmarshal(data, &res); err != nil {
+			return err
+		}
+		gas = uint64(res.Result)
+		return nil
+	}, retry.Context(ctx), rtyAtt, rtyDel, rtyErr); err != nil {
+		return 0, err
+	}
+	return gas, nil
+}
+
 // CalculateGas simulates a tx to generate the appropriate gas settings before broadcasting a tx.
 func (cc *CosmosProvider) CalculateGas(ctx context.Context, txf tx.Factory, signingKey string, msgs ...sdk.Msg) (txtypes.SimulateResponse, uint64, error) {
+	if len(cc.PCfg.PrecompiledContractAddress) > 0 {
+		to := common.HexToAddress(cc.PCfg.PrecompiledContractAddress)
+		chainID, err := ethermintcodecs.ParseChainID(cc.PCfg.ChainID)
+		if err != nil {
+			return txtypes.SimulateResponse{}, 0, err
+		}
+		gasPrices, err := convertCoins(cc.PCfg.GasPrices)
+		if err != nil {
+			return txtypes.SimulateResponse{}, 0, err
+		}
+		gasPrice := gasPrices[0].Amount.BigInt()
+
+		args := make([]*evmtypes.TransactionArgs, len(msgs))
+		for i, m := range msgs {
+			signers := m.GetSigners()
+			if len(signers) == 0 {
+				return txtypes.SimulateResponse{}, 0, fmt.Errorf("invalid signers length %d", len(signers))
+			}
+			from, err := convertAddress(signers[0].String())
+			if err != nil {
+				return txtypes.SimulateResponse{}, 0, err
+			}
+			input, err := proto.Marshal(m)
+			if err != nil {
+				return txtypes.SimulateResponse{}, 0, err
+			}
+			prefix, ok := messageMap[reflect.TypeOf(m)]
+			if !ok {
+				return txtypes.SimulateResponse{}, 0, fmt.Errorf("invalid message type %T", m)
+			}
+			data := hexutil.Bytes(addLengthPrefix(prefix, input))
+			nonce := hexutil.Uint64(txf.Sequence() + uint64(i))
+			args[i] = &evmtypes.TransactionArgs{
+				From:     from,
+				To:       &to,
+				GasPrice: (*hexutil.Big)(gasPrice),
+				Value:    (*hexutil.Big)(big.NewInt(0)),
+				Nonce:    &nonce,
+				Data:     &data,
+				ChainID:  (*hexutil.Big)(chainID),
+			}
+		}
+		gas, err := cc.calculateEvmGas(ctx, args)
+		if err == nil {
+			gas, err = cc.AdjustEstimatedGas(gas)
+		}
+		return txtypes.SimulateResponse{}, gas, err
+	}
+
 	keyInfo, err := cc.Keybase.Key(signingKey)
 	if err != nil {
 		return txtypes.SimulateResponse{}, 0, err
