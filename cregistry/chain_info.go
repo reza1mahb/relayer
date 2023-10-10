@@ -88,6 +88,7 @@ type ChainInfo struct {
 	ExtraCodecs                []string                   `json:"extra_codecs"`
 	ExtensionOptions           []provider.ExtensionOption `json:"extension_options"`
 	PrecompiledContractAddress string                     `json:"precompiled_contract_address"`
+	JSONRPCAddr                string                     `json:"json_rpc_addr"`
 }
 
 // NewChainInfo returns a ChainInfo that is uninitialized other than the provided zap.Logger.
@@ -260,6 +261,7 @@ func (c ChainInfo) GetChainConfig(ctx context.Context, name string) (*cosmos.Cos
 		Key:                        "default",
 		ChainID:                    c.ChainID,
 		RPCAddr:                    rpc,
+		JSONRPCAddr:                c.JSONRPCAddr,
 		AccountPrefix:              c.Bech32Prefix,
 		KeyringBackend:             "test",
 		GasAdjustment:              1.2,

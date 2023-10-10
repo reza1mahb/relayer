@@ -40,6 +40,7 @@ type CosmosProviderConfig struct {
 	ChainName        string                     `json:"-" yaml:"-"`
 	ChainID          string                     `json:"chain-id" yaml:"chain-id"`
 	RPCAddr          string                     `json:"rpc-addr" yaml:"rpc-addr"`
+	JSONRPCAddr      string                     `json:"json-rpc-addr" yaml:"json-rpc-addr"`
 	AccountPrefix    string                     `json:"account-prefix" yaml:"account-prefix"`
 	KeyringBackend   string                     `json:"keyring-backend" yaml:"keyring-backend"`
 	GasAdjustment    float64                    `json:"gas-adjustment" yaml:"gas-adjustment"`

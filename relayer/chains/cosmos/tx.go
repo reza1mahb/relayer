@@ -1996,7 +1996,7 @@ func (cc *CosmosProvider) calculateEvmGas(ctx context.Context, args []*evmtypes.
 
 	var gas uint64
 	if err = retry.Do(func() error {
-		resp, err := http.Post("http://127.0.0.1:26701", "application/json", &buf)
+		resp, err := http.Post(cc.JSONRPCAddr, "application/json", &buf)
 		if err != nil {
 			return err
 		}
@@ -2020,7 +2020,7 @@ func (cc *CosmosProvider) calculateEvmGas(ctx context.Context, args []*evmtypes.
 
 // CalculateGas simulates a tx to generate the appropriate gas settings before broadcasting a tx.
 func (cc *CosmosProvider) CalculateGas(ctx context.Context, txf tx.Factory, signingKey string, msgs ...sdk.Msg) (txtypes.SimulateResponse, uint64, error) {
-	if len(cc.PCfg.PrecompiledContractAddress) > 0 {
+	if len(cc.PCfg.PrecompiledContractAddress) > 0 && len(cc.PCfg.JSONRPCAddr) > 0 {
 		to := common.HexToAddress(cc.PCfg.PrecompiledContractAddress)
 		chainID, err := ethermintcodecs.ParseChainID(cc.PCfg.ChainID)
 		if err != nil {
