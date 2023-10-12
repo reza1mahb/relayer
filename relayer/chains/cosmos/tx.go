@@ -1977,8 +1977,8 @@ func (cc *CosmosProvider) SetWithExtensionOptions(txf tx.Factory) (tx.Factory, e
 	return txf.WithExtensionOptions(extOpts...), nil
 }
 
-func (cc *CosmosProvider) calculateEvmGas(ctx context.Context, args []*evmtypes.TransactionArgs) (uint64, error) {
-	params, err := json.Marshal(args)
+func (cc *CosmosProvider) calculateEvmGas(ctx context.Context, arg *evmtypes.TransactionArgs) (uint64, error) {
+	params, err := json.Marshal([]*evmtypes.TransactionArgs{arg})
 	if err != nil {
 		return 0, err
 	}
@@ -1996,7 +1996,7 @@ func (cc *CosmosProvider) calculateEvmGas(ctx context.Context, args []*evmtypes.
 
 	var gas uint64
 	if err = retry.Do(func() error {
-		resp, err := http.Post(cc.JSONRPCAddr, "application/json", &buf)
+		resp, err := http.Post(cc.PCfg.JSONRPCAddr, "application/json", &buf)
 		if err != nil {
 			return err
 		}
@@ -2032,8 +2032,12 @@ func (cc *CosmosProvider) CalculateGas(ctx context.Context, txf tx.Factory, sign
 		}
 		gasPrice := gasPrices[0].Amount.BigInt()
 
-		args := make([]*evmtypes.TransactionArgs, len(msgs))
+		var gas uint64
 		for i, m := range msgs {
+			prefix, ok := messageMap[reflect.TypeOf(m)]
+			if !ok {
+				return txtypes.SimulateResponse{}, 0, fmt.Errorf("invalid message type %T", m)
+			}
 			signers := m.GetSigners()
 			if len(signers) == 0 {
 				return txtypes.SimulateResponse{}, 0, fmt.Errorf("invalid signers length %d", len(signers))
@@ -2046,13 +2050,9 @@ func (cc *CosmosProvider) CalculateGas(ctx context.Context, txf tx.Factory, sign
 			if err != nil {
 				return txtypes.SimulateResponse{}, 0, err
 			}
-			prefix, ok := messageMap[reflect.TypeOf(m)]
-			if !ok {
-				return txtypes.SimulateResponse{}, 0, fmt.Errorf("invalid message type %T", m)
-			}
 			data := hexutil.Bytes(addLengthPrefix(prefix, input))
 			nonce := hexutil.Uint64(txf.Sequence() + uint64(i))
-			args[i] = &evmtypes.TransactionArgs{
+			arg := &evmtypes.TransactionArgs{
 				From:     from,
 				To:       &to,
 				GasPrice: (*hexutil.Big)(gasPrice),
@@ -2061,10 +2061,15 @@ func (cc *CosmosProvider) CalculateGas(ctx context.Context, txf tx.Factory, sign
 				Data:     &data,
 				ChainID:  (*hexutil.Big)(chainID),
 			}
-		}
-		gas, err := cc.calculateEvmGas(ctx, args)
-		if err == nil {
-			gas, err = cc.AdjustEstimatedGas(gas)
+			g, err := cc.calculateEvmGas(ctx, arg)
+			if err != nil {
+				return txtypes.SimulateResponse{}, 0, err
+			}
+			g, err = cc.AdjustEstimatedGas(g)
+			if err != nil {
+				return txtypes.SimulateResponse{}, 0, err
+			}
+			gas += g
 		}
 		return txtypes.SimulateResponse{}, gas, err
 	}
