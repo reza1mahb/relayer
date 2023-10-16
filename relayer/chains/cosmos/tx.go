@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	errorsmod "cosmossdk.io/errors"
@@ -2021,10 +2022,9 @@ func (cc *CosmosProvider) calculateEvmGas(ctx context.Context, arg *evmtypes.Tra
 		if err != nil {
 			return err
 		}
-		// if res.Error != nil {
-		// 	return fmt.Errorf(res.Error.Message)
-		// }
-		gas = uint64(res.Result)
+		if res.Error == nil {
+			gas = uint64(res.Result)
+		}
 		return nil
 	}, retry.Context(ctx), rtyAtt, rtyDel, rtyErr); err != nil {
 		return 0, err
@@ -2047,43 +2047,59 @@ func (cc *CosmosProvider) CalculateGas(ctx context.Context, txf tx.Factory, sign
 		gasPrice := gasPrices[0].Amount.BigInt()
 
 		var gas uint64
+		chErr := make(chan error)
 		for i, m := range msgs {
-			prefix, ok := messageMap[reflect.TypeOf(m)]
-			if !ok {
-				return txtypes.SimulateResponse{}, 0, fmt.Errorf("invalid message type %T", m)
-			}
-			signers := m.GetSigners()
-			if len(signers) == 0 {
-				return txtypes.SimulateResponse{}, 0, fmt.Errorf("invalid signers length %d", len(signers))
-			}
-			from, err := convertAddress(signers[0].String())
-			if err != nil {
+			go func(i int, m sdk.Msg) {
+				prefix, ok := messageMap[reflect.TypeOf(m)]
+				if !ok {
+					chErr <- fmt.Errorf("invalid message type %T", m)
+					return
+				}
+				signers := m.GetSigners()
+				if len(signers) == 0 {
+					chErr <- fmt.Errorf("invalid signers length %d", len(signers))
+					return
+				}
+				from, err := convertAddress(signers[0].String())
+				if err != nil {
+					chErr <- err
+					return
+				}
+				input, err := proto.Marshal(m)
+				if err != nil {
+					chErr <- err
+					return
+				}
+				data := hexutil.Bytes(addLengthPrefix(prefix, input))
+				nonce := hexutil.Uint64(txf.Sequence() + uint64(i))
+				arg := &evmtypes.TransactionArgs{
+					From:     from,
+					To:       &to,
+					GasPrice: (*hexutil.Big)(gasPrice),
+					Value:    (*hexutil.Big)(big.NewInt(0)),
+					Nonce:    &nonce,
+					Data:     &data,
+					ChainID:  (*hexutil.Big)(chainID),
+				}
+				g, err := cc.calculateEvmGas(ctx, arg)
+				if err != nil {
+					chErr <- err
+					return
+				}
+				g, err = cc.AdjustEstimatedGas(g)
+				if err != nil {
+					chErr <- err
+					return
+				}
+
+				atomic.AddUint64(&gas, g)
+				chErr <- nil
+			}(i, m)
+		}
+		for range msgs {
+			if err = <-chErr; err != nil {
 				return txtypes.SimulateResponse{}, 0, err
 			}
-			input, err := proto.Marshal(m)
-			if err != nil {
-				return txtypes.SimulateResponse{}, 0, err
-			}
-			data := hexutil.Bytes(addLengthPrefix(prefix, input))
-			nonce := hexutil.Uint64(txf.Sequence() + uint64(i))
-			arg := &evmtypes.TransactionArgs{
-				From:     from,
-				To:       &to,
-				GasPrice: (*hexutil.Big)(gasPrice),
-				Value:    (*hexutil.Big)(big.NewInt(0)),
-				Nonce:    &nonce,
-				Data:     &data,
-				ChainID:  (*hexutil.Big)(chainID),
-			}
-			g, err := cc.calculateEvmGas(ctx, arg)
-			if err != nil {
-				return txtypes.SimulateResponse{}, 0, err
-			}
-			g, err = cc.AdjustEstimatedGas(g)
-			if err != nil {
-				return txtypes.SimulateResponse{}, 0, err
-			}
-			gas += g
 		}
 		return txtypes.SimulateResponse{}, gas, err
 	}
