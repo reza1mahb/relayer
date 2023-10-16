@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"math/rand"
 	"net/http"
@@ -1927,6 +1928,9 @@ func (cc *CosmosProvider) PrepareFactory(txf tx.Factory, signingKey string) (tx.
 		txf = txf.WithGas(cc.PCfg.MaxGasAmount)
 	}
 
+	if cc.PCfg.MaxGasAmount != 0 {
+		txf = txf.WithGas(cc.PCfg.MaxGasAmount)
+	}
 	txf, err = cc.SetWithExtensionOptions(txf)
 	if err != nil {
 		return tx.Factory{}, err
@@ -1945,6 +1949,9 @@ func (cc *CosmosProvider) AdjustEstimatedGas(gasUsed uint64) (uint64, error) {
 		return 0, fmt.Errorf("estimated gas %d is higher than max gas %d", gasUsed, cc.PCfg.MaxGasAmount)
 	}
 	gas := cc.PCfg.GasAdjustment * float64(gasUsed)
+	if math.IsInf(gas, 1) {
+		return 0, fmt.Errorf("infinite gas used")
+	}
 	return uint64(gas), nil
 }
 
@@ -1988,28 +1995,35 @@ func (cc *CosmosProvider) calculateEvmGas(ctx context.Context, arg *evmtypes.Tra
 		Params:  params,
 		ID:      []byte("1"),
 	}
-	var buf sysbytes.Buffer
-	err = json.NewEncoder(&buf).Encode(req)
-	if err != nil {
-		return 0, err
-	}
 
 	var gas uint64
 	if err = retry.Do(func() error {
+		var buf sysbytes.Buffer
+		err = json.NewEncoder(&buf).Encode(req)
+		if err != nil {
+			return err
+		}
 		resp, err := http.Post(cc.PCfg.JSONRPCAddr, "application/json", &buf)
 		if err != nil {
 			return err
 		}
 
 		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return fmt.Errorf("fail status %d", resp.StatusCode)
+		}
 		data, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return err
 		}
 		var res jsonrpcMessage
-		if err = json.Unmarshal(data, &res); err != nil {
+		err = json.Unmarshal(data, &res)
+		if err != nil {
 			return err
 		}
+		// if res.Error != nil {
+		// 	return fmt.Errorf(res.Error.Message)
+		// }
 		gas = uint64(res.Result)
 		return nil
 	}, retry.Context(ctx), rtyAtt, rtyDel, rtyErr); err != nil {
