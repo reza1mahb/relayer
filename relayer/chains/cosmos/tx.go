@@ -809,8 +809,100 @@ var messageMap = map[reflect.Type]string{
 	reflect.TypeOf((*chantypes.MsgTimeoutOnClose)(nil)):        "timeoutOnClose",
 }
 
-func packData(method string, args ...interface{}) ([]byte, error) {
+type methodCombo struct {
+	Methods       []string
+	NewMethodName string
+}
+
+var methodCombos = []*methodCombo{
+	{
+		Methods: []string{
+			"updateClient",
+			"connectionOpenTry",
+		},
+		NewMethodName: "updateClientAndConnectionOpenTry",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"connectionOpenConfirm",
+		},
+		NewMethodName: "updateClientAndConnectionOpenConfirm",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"channelOpenTry",
+		},
+		NewMethodName: "updateClientAndChannelOpenTry",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"channelOpenConfirm",
+		},
+		NewMethodName: "updateClientAndChannelOpenConfirm",
+	},
+}
+
+func packData(method string, msgs ...sdk.Msg) ([]byte, error) {
+	args := make([]interface{}, 0, len(msgs))
+	for _, m := range msgs {
+		input, err := proto.Marshal(m)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, input)
+	}
 	return relayerABI.Pack(method, args...)
+}
+
+type inputAndSigners struct {
+	Input   []byte
+	Signers []sdk.AccAddress
+}
+
+func extractMsgInputs(msgs []sdk.Msg) (results []*inputAndSigners, err error) {
+	for _, c := range methodCombos {
+		if len(msgs) < len(c.Methods) {
+			continue
+		}
+
+		matched := true
+		for i, method := range c.Methods {
+			if messageMap[reflect.TypeOf(msgs[i])] != method {
+				matched = false
+				break
+			}
+		}
+
+		if matched {
+			input, err := packData(c.NewMethodName, msgs[:len(c.Methods)]...)
+			if err != nil {
+				return nil, err
+			}
+
+			results = append(results, &inputAndSigners{input, msgs[0].GetSigners()})
+			msgs = msgs[len(c.Methods):]
+			break
+		}
+	}
+
+	for _, m := range msgs {
+		t := reflect.TypeOf(m)
+		method, ok := messageMap[t]
+		if !ok {
+			return nil, errorsmod.Wrapf(sdkerrors.ErrUnknownRequest, "invalid message type %T", m)
+		}
+
+		input, err := packData(method, m)
+		if err != nil {
+			return nil, err
+		}
+
+		results = append(results, &inputAndSigners{input, m.GetSigners()})
+	}
+	return
 }
 
 func (cc *CosmosProvider) buildEvmMessages(
@@ -843,12 +935,14 @@ func (cc *CosmosProvider) buildEvmMessages(
 	var txGasLimit uint64 = 0
 	contractAddress := common.HexToAddress(cc.PCfg.PrecompiledContractAddress)
 	blockNumber := new(big.Int)
-	for i, m := range txb.GetTx().GetMsgs() {
-		method, ok := messageMap[reflect.TypeOf(m)]
-		if !ok {
-			return nil, 0, sdk.Coins{}, errorsmod.Wrapf(sdkerrors.ErrUnknownRequest, "invalid message type %T", m)
-		}
-		signers := m.GetSigners()
+
+	inputs, err := extractMsgInputs(txb.GetTx().GetMsgs())
+	if err != nil {
+		return nil, 0, sdk.Coins{}, err
+	}
+
+	for i, is := range inputs {
+		signers := is.Signers
 		if len(signers) != 1 {
 			return nil, 0, sdk.Coins{}, errorsmod.Wrapf(sdkerrors.ErrUnknownRequest, "invalid signers length %d", len(signers))
 		}
@@ -856,17 +950,9 @@ func (cc *CosmosProvider) buildEvmMessages(
 		if err != nil {
 			return nil, 0, sdk.Coins{}, err
 		}
-		input, err := proto.Marshal(m)
-		if err != nil {
-			return nil, 0, sdk.Coins{}, err
-		}
 		nonce := txf.Sequence() + uint64(i)
 		amount := big.NewInt(0)
-		input, err = packData(method, input)
-		if err != nil {
-			return nil, 0, sdk.Coins{}, err
-		}
-		tx := evmtypes.NewTx(chainID, nonce, &contractAddress, amount, gasLimit, gasFeeCap, gasPrice, gasTipCap, input, &ethtypes.AccessList{})
+		tx := evmtypes.NewTx(chainID, nonce, &contractAddress, amount, gasLimit, gasFeeCap, gasPrice, gasTipCap, is.Input, &ethtypes.AccessList{})
 		tx.From = from.Bytes()
 		if err := tx.ValidateBasic(); err != nil {
 			cc.log.Info("tx failed basic validation", zap.Error(err))
@@ -2001,8 +2087,7 @@ func (cc *CosmosProvider) calculateEvmGas(ctx context.Context, arg *evmtypes.Tra
 			return err
 		}
 		var res jsonrpcMessage
-		err = json.Unmarshal(data, &res)
-		if err != nil {
+		if err = json.Unmarshal(data, &res); err != nil {
 			return err
 		}
 		if res.Error == nil {
@@ -2031,14 +2116,14 @@ func (cc *CosmosProvider) CalculateGas(ctx context.Context, txf tx.Factory, sign
 
 		var gas uint64
 		chErr := make(chan error)
-		for i, m := range msgs {
-			go func(i int, m sdk.Msg) {
-				prefix, ok := messageMap[reflect.TypeOf(m)]
-				if !ok {
-					chErr <- fmt.Errorf("invalid message type %T", m)
-					return
-				}
-				signers := m.GetSigners()
+		inputs, err := extractMsgInputs(msgs)
+		if err != nil {
+			return txtypes.SimulateResponse{}, 0, err
+		}
+
+		for i, is := range inputs {
+			go func(i int, is *inputAndSigners) {
+				signers := is.Signers
 				if len(signers) == 0 {
 					chErr <- fmt.Errorf("invalid signers length %d", len(signers))
 					return
@@ -2048,12 +2133,7 @@ func (cc *CosmosProvider) CalculateGas(ctx context.Context, txf tx.Factory, sign
 					chErr <- err
 					return
 				}
-				input, err := proto.Marshal(m)
-				if err != nil {
-					chErr <- err
-					return
-				}
-				data := hexutil.Bytes(addLengthPrefix(prefix, input))
+				data := hexutil.Bytes(is.Input)
 				nonce := hexutil.Uint64(txf.Sequence() + uint64(i))
 				arg := &evmtypes.TransactionArgs{
 					From:     from,
@@ -2077,9 +2157,9 @@ func (cc *CosmosProvider) CalculateGas(ctx context.Context, txf tx.Factory, sign
 
 				atomic.AddUint64(&gas, g)
 				chErr <- nil
-			}(i, m)
+			}(i, is)
 		}
-		for range msgs {
+		for range inputs {
 			if err = <-chErr; err != nil {
 				return txtypes.SimulateResponse{}, 0, err
 			}
