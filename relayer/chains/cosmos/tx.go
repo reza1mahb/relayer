@@ -3,7 +3,6 @@ package cosmos
 import (
 	sysbytes "bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,9 +51,11 @@ import (
 	ibcexported "github.com/cosmos/ibc-go/v7/modules/core/exported"
 	tmclient "github.com/cosmos/ibc-go/v7/modules/light-clients/07-tendermint"
 	localhost "github.com/cosmos/ibc-go/v7/modules/light-clients/09-localhost"
+	"github.com/cosmos/relayer/v2/relayer/chains/cosmos/precompile/relayer"
 	strideicqtypes "github.com/cosmos/relayer/v2/relayer/chains/cosmos/stride"
 	ethermintcodecs "github.com/cosmos/relayer/v2/relayer/codecs/ethermint"
 	"github.com/cosmos/relayer/v2/relayer/provider"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
@@ -89,7 +90,14 @@ var (
 	waTag      = "write_acknowledgement"
 	srcChanTag = "packet_src_channel"
 	dstChanTag = "packet_dst_channel"
+	relayerABI abi.ABI
 )
+
+func init() {
+	if err := relayerABI.UnmarshalJSON([]byte(relayer.RelayerFunctionsMetaData.ABI)); err != nil {
+		panic(err)
+	}
+}
 
 // SendMessage attempts to sign, encode & send a RelayerMessage
 // This is used extensively in the relayer as an extension of the Provider interface
@@ -780,57 +788,29 @@ func getChainConfig(chainID *big.Int) *params.ChainConfig {
 	}
 }
 
-// prefix bytes for the relayer msg type
-const (
-	prefixSize4Bytes = 4
-	// Client
-	prefixCreateClient = iota + 1
-	prefixUpdateClient
-	prefixUpgradeClient
-	prefixSubmitMisbehaviour
-	// Connection
-	prefixConnectionOpenInit
-	prefixConnectionOpenTry
-	prefixConnectionOpenAck
-	prefixConnectionOpenConfirm
-	// Channel
-	prefixChannelOpenInit
-	prefixChannelOpenTry
-	prefixChannelOpenAck
-	prefixChannelOpenConfirm
-	prefixChannelCloseInit
-	prefixChannelCloseConfirm
-	prefixRecvPacket
-	prefixAcknowledgement
-	prefixTimeout
-	prefixTimeoutOnClose
-)
-
-var messageMap = map[reflect.Type]int{
-	reflect.TypeOf((*clienttypes.MsgCreateClient)(nil)):        prefixCreateClient,
-	reflect.TypeOf((*clienttypes.MsgUpdateClient)(nil)):        prefixUpdateClient,
-	reflect.TypeOf((*clienttypes.MsgUpgradeClient)(nil)):       prefixUpgradeClient,
-	reflect.TypeOf((*clienttypes.MsgSubmitMisbehaviour)(nil)):  prefixSubmitMisbehaviour,
-	reflect.TypeOf((*conntypes.MsgConnectionOpenInit)(nil)):    prefixConnectionOpenInit,
-	reflect.TypeOf((*conntypes.MsgConnectionOpenTry)(nil)):     prefixConnectionOpenTry,
-	reflect.TypeOf((*conntypes.MsgConnectionOpenAck)(nil)):     prefixConnectionOpenAck,
-	reflect.TypeOf((*conntypes.MsgConnectionOpenConfirm)(nil)): prefixConnectionOpenConfirm,
-	reflect.TypeOf((*chantypes.MsgChannelOpenInit)(nil)):       prefixChannelOpenInit,
-	reflect.TypeOf((*chantypes.MsgChannelOpenTry)(nil)):        prefixChannelOpenTry,
-	reflect.TypeOf((*chantypes.MsgChannelOpenAck)(nil)):        prefixChannelOpenAck,
-	reflect.TypeOf((*chantypes.MsgChannelOpenConfirm)(nil)):    prefixChannelOpenConfirm,
-	reflect.TypeOf((*chantypes.MsgChannelCloseInit)(nil)):      prefixChannelCloseInit,
-	reflect.TypeOf((*chantypes.MsgChannelCloseConfirm)(nil)):   prefixChannelCloseConfirm,
-	reflect.TypeOf((*chantypes.MsgRecvPacket)(nil)):            prefixRecvPacket,
-	reflect.TypeOf((*chantypes.MsgAcknowledgement)(nil)):       prefixAcknowledgement,
-	reflect.TypeOf((*chantypes.MsgTimeout)(nil)):               prefixTimeout,
-	reflect.TypeOf((*chantypes.MsgTimeoutOnClose)(nil)):        prefixTimeoutOnClose,
+var messageMap = map[reflect.Type]string{
+	reflect.TypeOf((*clienttypes.MsgCreateClient)(nil)):        "createClient",
+	reflect.TypeOf((*clienttypes.MsgUpdateClient)(nil)):        "updateClient",
+	reflect.TypeOf((*clienttypes.MsgUpgradeClient)(nil)):       "upgradeClient",
+	reflect.TypeOf((*clienttypes.MsgSubmitMisbehaviour)(nil)):  "submitMisbehaviour",
+	reflect.TypeOf((*conntypes.MsgConnectionOpenInit)(nil)):    "connectionOpenInit",
+	reflect.TypeOf((*conntypes.MsgConnectionOpenTry)(nil)):     "connectionOpenTry",
+	reflect.TypeOf((*conntypes.MsgConnectionOpenAck)(nil)):     "connectionOpenAck",
+	reflect.TypeOf((*conntypes.MsgConnectionOpenConfirm)(nil)): "connectionOpenConfirm",
+	reflect.TypeOf((*chantypes.MsgChannelOpenInit)(nil)):       "channelOpenInit",
+	reflect.TypeOf((*chantypes.MsgChannelOpenTry)(nil)):        "channelOpenTry",
+	reflect.TypeOf((*chantypes.MsgChannelOpenAck)(nil)):        "channelOpenAck",
+	reflect.TypeOf((*chantypes.MsgChannelOpenConfirm)(nil)):    "channelOpenConfirm",
+	reflect.TypeOf((*chantypes.MsgChannelCloseInit)(nil)):      "channelCloseInit",
+	reflect.TypeOf((*chantypes.MsgChannelCloseConfirm)(nil)):   "channelCloseConfirm",
+	reflect.TypeOf((*chantypes.MsgRecvPacket)(nil)):            "recvPacket",
+	reflect.TypeOf((*chantypes.MsgAcknowledgement)(nil)):       "acknowledgement",
+	reflect.TypeOf((*chantypes.MsgTimeout)(nil)):               "timeout",
+	reflect.TypeOf((*chantypes.MsgTimeoutOnClose)(nil)):        "timeoutOnClose",
 }
 
-func addLengthPrefix(prefix int, input []byte) []byte {
-	prefixBytes := make([]byte, prefixSize4Bytes)
-	binary.LittleEndian.PutUint32(prefixBytes, uint32(prefix))
-	return append(prefixBytes, input...)
+func packData(method string, args ...interface{}) ([]byte, error) {
+	return relayerABI.Pack(method, args...)
 }
 
 func (cc *CosmosProvider) buildEvmMessages(
@@ -864,7 +844,7 @@ func (cc *CosmosProvider) buildEvmMessages(
 	contractAddress := common.HexToAddress(cc.PCfg.PrecompiledContractAddress)
 	blockNumber := new(big.Int)
 	for i, m := range txb.GetTx().GetMsgs() {
-		prefix, ok := messageMap[reflect.TypeOf(m)]
+		method, ok := messageMap[reflect.TypeOf(m)]
 		if !ok {
 			return nil, 0, sdk.Coins{}, errorsmod.Wrapf(sdkerrors.ErrUnknownRequest, "invalid message type %T", m)
 		}
@@ -882,7 +862,10 @@ func (cc *CosmosProvider) buildEvmMessages(
 		}
 		nonce := txf.Sequence() + uint64(i)
 		amount := big.NewInt(0)
-		input = addLengthPrefix(prefix, input)
+		input, err = packData(method, input)
+		if err != nil {
+			return nil, 0, sdk.Coins{}, err
+		}
 		tx := evmtypes.NewTx(chainID, nonce, &contractAddress, amount, gasLimit, gasFeeCap, gasPrice, gasTipCap, input, &ethtypes.AccessList{})
 		tx.From = from.Bytes()
 		if err := tx.ValidateBasic(); err != nil {
