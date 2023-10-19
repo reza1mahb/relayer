@@ -843,6 +843,13 @@ var methodCombos = []*methodCombo{
 		},
 		NewMethodName: "updateClientAndChannelOpenConfirm",
 	},
+	{
+		Methods: []string{
+			"updateClient",
+			"recvPacket",
+		},
+		NewMethodName: "updateClientAndRecvPacket",
+	},
 }
 
 func packData(method string, msgs ...sdk.Msg) ([]byte, error) {
@@ -2090,9 +2097,11 @@ func (cc *CosmosProvider) calculateEvmGas(ctx context.Context, arg *evmtypes.Tra
 		if err = json.Unmarshal(data, &res); err != nil {
 			return err
 		}
-		if res.Error == nil {
-			gas = uint64(res.Result)
+		if res.Error != nil {
+			return fmt.Errorf("res err %s", res.Error.Message)
 		}
+		fmt.Println("mm-calculateEvmGas", res.Result)
+		gas = uint64(res.Result)
 		return nil
 	}, retry.Context(ctx), rtyAtt, rtyDel, rtyErr); err != nil {
 		return 0, err
