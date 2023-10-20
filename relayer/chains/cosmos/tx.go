@@ -2151,7 +2151,6 @@ func (cc *CosmosProvider) calculateEvmGas(ctx context.Context, arg *evmtypes.Tra
 		if res.Error != nil {
 			return fmt.Errorf("res err %s", res.Error.Message)
 		}
-		fmt.Println("mm-calculateEvmGas", res.Result)
 		gas = uint64(res.Result)
 		return nil
 	}, retry.Context(ctx), rtyAtt, rtyDel, rtyErr); err != nil {
