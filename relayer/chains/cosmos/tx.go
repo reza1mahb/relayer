@@ -818,9 +818,23 @@ var methodCombos = []*methodCombo{
 	{
 		Methods: []string{
 			"updateClient",
+			"connectionOpenInit",
+		},
+		NewMethodName: "updateClientAndConnectionOpenInit",
+	},
+	{
+		Methods: []string{
+			"updateClient",
 			"connectionOpenTry",
 		},
 		NewMethodName: "updateClientAndConnectionOpenTry",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"connectionOpenAck",
+		},
+		NewMethodName: "updateClientAndConnectionOpenAck",
 	},
 	{
 		Methods: []string{
@@ -832,9 +846,23 @@ var methodCombos = []*methodCombo{
 	{
 		Methods: []string{
 			"updateClient",
+			"channelOpenInit",
+		},
+		NewMethodName: "updateClientAndChannelOpenInit",
+	},
+	{
+		Methods: []string{
+			"updateClient",
 			"channelOpenTry",
 		},
 		NewMethodName: "updateClientAndChannelOpenTry",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"channelOpenAck",
+		},
+		NewMethodName: "updateClientAndChannelOpenAck",
 	},
 	{
 		Methods: []string{
@@ -849,6 +877,27 @@ var methodCombos = []*methodCombo{
 			"recvPacket",
 		},
 		NewMethodName: "updateClientAndRecvPacket",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"acknowledgement",
+		},
+		NewMethodName: "updateClientAndAcknowledgement",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"timeout",
+		},
+		NewMethodName: "updateClientAndTimeout",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"timeoutOnClose",
+		},
+		NewMethodName: "updateClientAndTimeoutOnClose",
 	},
 }
 
@@ -869,7 +918,7 @@ type inputAndSigners struct {
 	Signers []sdk.AccAddress
 }
 
-func extractMsgInputs(msgs []sdk.Msg) (results []*inputAndSigners, err error) {
+func extractMsgInputs(msgs []sdk.Msg) (method string, results []*inputAndSigners, err error) {
 	for _, c := range methodCombos {
 		if len(msgs) < len(c.Methods) {
 			continue
@@ -886,9 +935,10 @@ func extractMsgInputs(msgs []sdk.Msg) (results []*inputAndSigners, err error) {
 		if matched {
 			input, err := packData(c.NewMethodName, msgs[:len(c.Methods)]...)
 			if err != nil {
-				return nil, err
+				return "", nil, err
 			}
 
+			method = c.NewMethodName
 			results = append(results, &inputAndSigners{input, msgs[0].GetSigners()})
 			msgs = msgs[len(c.Methods):]
 			break
@@ -897,14 +947,15 @@ func extractMsgInputs(msgs []sdk.Msg) (results []*inputAndSigners, err error) {
 
 	for _, m := range msgs {
 		t := reflect.TypeOf(m)
-		method, ok := messageMap[t]
+		var ok bool
+		method, ok = messageMap[t]
 		if !ok {
-			return nil, errorsmod.Wrapf(sdkerrors.ErrUnknownRequest, "invalid message type %T", m)
+			return "", nil, errorsmod.Wrapf(sdkerrors.ErrUnknownRequest, "invalid message type %T", m)
 		}
 
 		input, err := packData(method, m)
 		if err != nil {
-			return nil, err
+			return "", nil, err
 		}
 
 		results = append(results, &inputAndSigners{input, m.GetSigners()})
@@ -943,7 +994,7 @@ func (cc *CosmosProvider) buildEvmMessages(
 	contractAddress := common.HexToAddress(cc.PCfg.PrecompiledContractAddress)
 	blockNumber := new(big.Int)
 
-	inputs, err := extractMsgInputs(txb.GetTx().GetMsgs())
+	_, inputs, err := extractMsgInputs(txb.GetTx().GetMsgs())
 	if err != nil {
 		return nil, 0, sdk.Coins{}, err
 	}
@@ -2125,7 +2176,7 @@ func (cc *CosmosProvider) CalculateGas(ctx context.Context, txf tx.Factory, sign
 
 		var gas uint64
 		chErr := make(chan error)
-		inputs, err := extractMsgInputs(msgs)
+		method, inputs, err := extractMsgInputs(msgs)
 		if err != nil {
 			return txtypes.SimulateResponse{}, 0, err
 		}
@@ -2154,11 +2205,13 @@ func (cc *CosmosProvider) CalculateGas(ctx context.Context, txf tx.Factory, sign
 					ChainID:  (*hexutil.Big)(chainID),
 				}
 				g, err := cc.calculateEvmGas(ctx, arg)
+				cc.log.Info("calculatedEvmGas", zap.Uint64(method, g))
 				if err != nil {
 					chErr <- err
 					return
 				}
 				g, err = cc.AdjustEstimatedGas(g)
+				cc.log.Info("adjustedEvmGas", zap.Uint64(method, g))
 				if err != nil {
 					chErr <- err
 					return
