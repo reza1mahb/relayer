@@ -874,6 +874,20 @@ var methodCombos = []*methodCombo{
 	{
 		Methods: []string{
 			"updateClient",
+			"channelCloseInit",
+		},
+		NewMethodName: "updateClientAndChannelCloseInit",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"channelCloseConfirm",
+		},
+		NewMethodName: "updateClientAndChannelCloseConfirm",
+	},
+	{
+		Methods: []string{
+			"updateClient",
 			"recvPacket",
 		},
 		NewMethodName: "updateClientAndRecvPacket",
