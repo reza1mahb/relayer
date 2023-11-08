@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"math/rand"
 	"reflect"
@@ -1902,6 +1903,9 @@ func (cc *CosmosProvider) PrepareFactory(txf tx.Factory, signingKey string) (tx.
 		txf = txf.WithGas(cc.PCfg.MinGasAmount)
 	}
 
+	if cc.PCfg.MaxGasAmount != 0 {
+		txf = txf.WithGas(cc.PCfg.MaxGasAmount)
+	}
 	txf, err = cc.SetWithExtensionOptions(txf)
 	if err != nil {
 		return tx.Factory{}, err
@@ -1920,6 +1924,9 @@ func (cc *CosmosProvider) AdjustEstimatedGas(gasUsed uint64) (uint64, error) {
 		return 0, fmt.Errorf("estimated gas %d is higher than max gas %d", gasUsed, cc.PCfg.MaxGasAmount)
 	}
 	gas := cc.PCfg.GasAdjustment * float64(gasUsed)
+	if math.IsInf(gas, 1) {
+		return 0, fmt.Errorf("infinite gas used")
+	}
 	return uint64(gas), nil
 }
 
