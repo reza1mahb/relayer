@@ -227,20 +227,15 @@ func (cc *CosmosProvider) AccountFromKeyOrAddress(keyOrAddress string) (out sdk.
 	return
 }
 
-func (cc *CosmosProvider) TrustingPeriod(ctx context.Context) (time.Duration, error) {
-	res, err := cc.QueryStakingParams(ctx)
+func (cc *CosmosProvider) TrustingPeriod(ctx context.Context, overrideUnbondingPeriod time.Duration) (time.Duration, error) {
 
-	var unbondingTime time.Duration
-	if err != nil {
-		// Attempt ICS query
-		consumerUnbondingPeriod, consumerErr := cc.queryConsumerUnbondingPeriod(ctx)
-		if consumerErr != nil {
-			return 0,
-				fmt.Errorf("failed to query unbonding period as both standard and consumer chain: %s: %w", err.Error(), consumerErr)
+	unbondingTime := overrideUnbondingPeriod
+	var err error
+	if unbondingTime == 0 {
+		unbondingTime, err = cc.QueryUnbondingPeriod(ctx)
+		if err != nil {
+			return 0, err
 		}
-		unbondingTime = consumerUnbondingPeriod
-	} else {
-		unbondingTime = res.UnbondingTime
 	}
 
 	// We want the trusting period to be 85% of the unbonding time.
@@ -267,6 +262,13 @@ func (cc *CosmosProvider) Sprint(toPrint proto.Message) (string, error) {
 		return "", err
 	}
 	return string(out), nil
+}
+
+// SetPCAddr sets the rpc-addr for the chain.
+// It will fail if the rpcAddr is invalid(not a url).
+func (cc *CosmosProvider) SetRpcAddr(rpcAddr string) error {
+	cc.PCfg.RPCAddr = rpcAddr
+	return nil
 }
 
 // Init initializes the keystore, RPC client, amd light client provider.
