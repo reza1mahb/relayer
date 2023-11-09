@@ -27,6 +27,7 @@
 * [\#4](https://github.com/crypto-org-chain/relayer/pull/4) Avoid packet get relayed when estimated gas is higher than max gas.
 * [\#1302](https://github.com/cosmos/relayer/pull/1302) Avoid packet get relayed when estimated gas is higher than max gas.
 * [\#1303](https://github.com/cosmos/relayer/pull/1303) Add missing max gas amount on txf to avoid estimate less gas when simualte runTx.
+* [\#1324](https://github.com/cosmos/relayer/pull/1324) Add log-level in global config.
 
 ## v0.9.3
 

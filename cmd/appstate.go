@@ -40,7 +40,10 @@ func (a *appState) loadConfigFile(ctx context.Context) error {
 
 	if _, err := os.Stat(cfgPath); err != nil {
 		// don't return error if file doesn't exist
-		return nil
+		if os.IsExist(err) {
+			err = nil
+		}
+		return err
 	}
 
 	// read the config file bytes
@@ -54,6 +57,23 @@ func (a *appState) loadConfigFile(ctx context.Context) error {
 	err = yaml.Unmarshal(file, cfgWrapper)
 	if err != nil {
 		return fmt.Errorf("error unmarshalling config: %w", err)
+	}
+	if a.log == nil {
+		debugMode := a.viper.GetBool("debug")
+		logLevel := ""
+		if debugMode {
+			logLevel = "debug"
+		} else {
+			logLevel = a.viper.GetString("log-level")
+			if logLevel == "" {
+				logLevel = cfgWrapper.Global.LogLevel
+			}
+		}
+		log, err := newRootLogger(a.viper.GetString("log-format"), logLevel)
+		if err != nil {
+			return err
+		}
+		a.log = log
 	}
 
 	// retrieve the runtime configuration from the disk configuration.
