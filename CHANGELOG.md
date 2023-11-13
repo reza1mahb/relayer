@@ -25,7 +25,7 @@
 * [\#1231](https://github.com/cosmos/relayer/pull/1231) Reduce get bech32 prefix when get signer.
 * [\#1225](https://github.com/cosmos/relayer/pull/1225) Support build EVM messages to allow signing Ethereum transactions.
 * [\#4](https://github.com/crypto-org-chain/relayer/pull/4) Avoid packet get relayed when estimated gas is higher than max gas.
-* [\#3](https://github.com/crypto-org-chain/relayer/pull/3) Make use of binding contract.
+* [\#6](https://github.com/crypto-org-chain/relayer/pull/6) Support accurate estimate gas with eth_estimateGas for evm tx.
 * [\#1302](https://github.com/cosmos/relayer/pull/1302) Avoid packet get relayed when estimated gas is higher than max gas.
 * [\#1303](https://github.com/cosmos/relayer/pull/1303) Add missing max gas amount on txf to avoid estimate less gas when simualte runTx.
 * [\#1324](https://github.com/cosmos/relayer/pull/1324) Add log-level in global config.
