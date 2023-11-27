@@ -1,18 +1,22 @@
 package cosmos
 
 import (
+	sysbytes "bytes"
 	"context"
-	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/big"
 	"math/rand"
+	"net/http"
 	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	errorsmod "cosmossdk.io/errors"
@@ -47,10 +51,13 @@ import (
 	ibcexported "github.com/cosmos/ibc-go/v7/modules/core/exported"
 	tmclient "github.com/cosmos/ibc-go/v7/modules/light-clients/07-tendermint"
 	localhost "github.com/cosmos/ibc-go/v7/modules/light-clients/09-localhost"
+	"github.com/cosmos/relayer/v2/relayer/chains/cosmos/precompile/relayer"
 	strideicqtypes "github.com/cosmos/relayer/v2/relayer/chains/cosmos/stride"
 	ethermintcodecs "github.com/cosmos/relayer/v2/relayer/codecs/ethermint"
 	"github.com/cosmos/relayer/v2/relayer/provider"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 	etherminttypes "github.com/evmos/ethermint/types"
@@ -83,7 +90,14 @@ var (
 	waTag      = "write_acknowledgement"
 	srcChanTag = "packet_src_channel"
 	dstChanTag = "packet_dst_channel"
+	relayerABI abi.ABI
 )
+
+func init() {
+	if err := relayerABI.UnmarshalJSON([]byte(relayer.RelayerFunctionsMetaData.ABI)); err != nil {
+		panic(err)
+	}
+}
 
 // SendMessage attempts to sign, encode & send a RelayerMessage
 // This is used extensively in the relayer as an extension of the Provider interface
@@ -158,6 +172,23 @@ func (cc *CosmosProvider) SendMessages(ctx context.Context, msgs []provider.Rela
 	}
 
 	return rlyResp, true, callbackErr
+}
+
+type jsonError struct {
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
+}
+
+// A value of this type can a JSON-RPC request, notification, successful response or
+// error response. Which one it is depends on the fields.
+type jsonrpcMessage struct {
+	Version string          `json:"jsonrpc,omitempty"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	Params  json.RawMessage `json:"params,omitempty"`
+	Error   *jsonError      `json:"error,omitempty"`
+	Result  hexutil.Uint    `json:"result,omitempty"`
 }
 
 // SendMessagesToMempool simulates and broadcasts a transaction with the given msgs and memo.
@@ -757,57 +788,193 @@ func getChainConfig(chainID *big.Int) *params.ChainConfig {
 	}
 }
 
-// prefix bytes for the relayer msg type
-const (
-	prefixSize4Bytes = 4
-	// Client
-	prefixCreateClient = iota + 1
-	prefixUpdateClient
-	prefixUpgradeClient
-	prefixSubmitMisbehaviour
-	// Connection
-	prefixConnectionOpenInit
-	prefixConnectionOpenTry
-	prefixConnectionOpenAck
-	prefixConnectionOpenConfirm
-	// Channel
-	prefixChannelOpenInit
-	prefixChannelOpenTry
-	prefixChannelOpenAck
-	prefixChannelOpenConfirm
-	prefixChannelCloseInit
-	prefixChannelCloseConfirm
-	prefixRecvPacket
-	prefixAcknowledgement
-	prefixTimeout
-	prefixTimeoutOnClose
-)
-
-var messageMap = map[reflect.Type]int{
-	reflect.TypeOf((*clienttypes.MsgCreateClient)(nil)):        prefixCreateClient,
-	reflect.TypeOf((*clienttypes.MsgUpdateClient)(nil)):        prefixUpdateClient,
-	reflect.TypeOf((*clienttypes.MsgUpgradeClient)(nil)):       prefixUpgradeClient,
-	reflect.TypeOf((*clienttypes.MsgSubmitMisbehaviour)(nil)):  prefixSubmitMisbehaviour,
-	reflect.TypeOf((*conntypes.MsgConnectionOpenInit)(nil)):    prefixConnectionOpenInit,
-	reflect.TypeOf((*conntypes.MsgConnectionOpenTry)(nil)):     prefixConnectionOpenTry,
-	reflect.TypeOf((*conntypes.MsgConnectionOpenAck)(nil)):     prefixConnectionOpenAck,
-	reflect.TypeOf((*conntypes.MsgConnectionOpenConfirm)(nil)): prefixConnectionOpenConfirm,
-	reflect.TypeOf((*chantypes.MsgChannelOpenInit)(nil)):       prefixChannelOpenInit,
-	reflect.TypeOf((*chantypes.MsgChannelOpenTry)(nil)):        prefixChannelOpenTry,
-	reflect.TypeOf((*chantypes.MsgChannelOpenAck)(nil)):        prefixChannelOpenAck,
-	reflect.TypeOf((*chantypes.MsgChannelOpenConfirm)(nil)):    prefixChannelOpenConfirm,
-	reflect.TypeOf((*chantypes.MsgChannelCloseInit)(nil)):      prefixChannelCloseInit,
-	reflect.TypeOf((*chantypes.MsgChannelCloseConfirm)(nil)):   prefixChannelCloseConfirm,
-	reflect.TypeOf((*chantypes.MsgRecvPacket)(nil)):            prefixRecvPacket,
-	reflect.TypeOf((*chantypes.MsgAcknowledgement)(nil)):       prefixAcknowledgement,
-	reflect.TypeOf((*chantypes.MsgTimeout)(nil)):               prefixTimeout,
-	reflect.TypeOf((*chantypes.MsgTimeoutOnClose)(nil)):        prefixTimeoutOnClose,
+var messageMap = map[reflect.Type]string{
+	reflect.TypeOf((*clienttypes.MsgCreateClient)(nil)):        "createClient",
+	reflect.TypeOf((*clienttypes.MsgUpdateClient)(nil)):        "updateClient",
+	reflect.TypeOf((*clienttypes.MsgUpgradeClient)(nil)):       "upgradeClient",
+	reflect.TypeOf((*clienttypes.MsgSubmitMisbehaviour)(nil)):  "submitMisbehaviour",
+	reflect.TypeOf((*conntypes.MsgConnectionOpenInit)(nil)):    "connectionOpenInit",
+	reflect.TypeOf((*conntypes.MsgConnectionOpenTry)(nil)):     "connectionOpenTry",
+	reflect.TypeOf((*conntypes.MsgConnectionOpenAck)(nil)):     "connectionOpenAck",
+	reflect.TypeOf((*conntypes.MsgConnectionOpenConfirm)(nil)): "connectionOpenConfirm",
+	reflect.TypeOf((*chantypes.MsgChannelOpenInit)(nil)):       "channelOpenInit",
+	reflect.TypeOf((*chantypes.MsgChannelOpenTry)(nil)):        "channelOpenTry",
+	reflect.TypeOf((*chantypes.MsgChannelOpenAck)(nil)):        "channelOpenAck",
+	reflect.TypeOf((*chantypes.MsgChannelOpenConfirm)(nil)):    "channelOpenConfirm",
+	reflect.TypeOf((*chantypes.MsgChannelCloseInit)(nil)):      "channelCloseInit",
+	reflect.TypeOf((*chantypes.MsgChannelCloseConfirm)(nil)):   "channelCloseConfirm",
+	reflect.TypeOf((*chantypes.MsgRecvPacket)(nil)):            "recvPacket",
+	reflect.TypeOf((*chantypes.MsgAcknowledgement)(nil)):       "acknowledgement",
+	reflect.TypeOf((*chantypes.MsgTimeout)(nil)):               "timeout",
+	reflect.TypeOf((*chantypes.MsgTimeoutOnClose)(nil)):        "timeoutOnClose",
 }
 
-func addLengthPrefix(prefix int, input []byte) []byte {
-	prefixBytes := make([]byte, prefixSize4Bytes)
-	binary.LittleEndian.PutUint32(prefixBytes, uint32(prefix))
-	return append(prefixBytes, input...)
+type methodCombo struct {
+	Methods       []string
+	NewMethodName string
+}
+
+var methodCombos = []*methodCombo{
+	{
+		Methods: []string{
+			"updateClient",
+			"connectionOpenInit",
+		},
+		NewMethodName: "updateClientAndConnectionOpenInit",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"connectionOpenTry",
+		},
+		NewMethodName: "updateClientAndConnectionOpenTry",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"connectionOpenAck",
+		},
+		NewMethodName: "updateClientAndConnectionOpenAck",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"connectionOpenConfirm",
+		},
+		NewMethodName: "updateClientAndConnectionOpenConfirm",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"channelOpenInit",
+		},
+		NewMethodName: "updateClientAndChannelOpenInit",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"channelOpenTry",
+		},
+		NewMethodName: "updateClientAndChannelOpenTry",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"channelOpenAck",
+		},
+		NewMethodName: "updateClientAndChannelOpenAck",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"channelOpenConfirm",
+		},
+		NewMethodName: "updateClientAndChannelOpenConfirm",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"channelCloseInit",
+		},
+		NewMethodName: "updateClientAndChannelCloseInit",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"channelCloseConfirm",
+		},
+		NewMethodName: "updateClientAndChannelCloseConfirm",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"recvPacket",
+		},
+		NewMethodName: "updateClientAndRecvPacket",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"acknowledgement",
+		},
+		NewMethodName: "updateClientAndAcknowledgement",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"timeout",
+		},
+		NewMethodName: "updateClientAndTimeout",
+	},
+	{
+		Methods: []string{
+			"updateClient",
+			"timeoutOnClose",
+		},
+		NewMethodName: "updateClientAndTimeoutOnClose",
+	},
+}
+
+func packData(method string, msgs ...sdk.Msg) ([]byte, error) {
+	args := make([]interface{}, 0, len(msgs))
+	for _, m := range msgs {
+		input, err := proto.Marshal(m)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, input)
+	}
+	return relayerABI.Pack(method, args...)
+}
+
+type inputAndSigners struct {
+	Input   []byte
+	Signers []sdk.AccAddress
+}
+
+func extractMsgInputs(msgs []sdk.Msg) (method string, results []*inputAndSigners, err error) {
+	for _, c := range methodCombos {
+		if len(msgs) < len(c.Methods) {
+			continue
+		}
+
+		matched := true
+		for i, method := range c.Methods {
+			if messageMap[reflect.TypeOf(msgs[i])] != method {
+				matched = false
+				break
+			}
+		}
+
+		if matched {
+			input, err := packData(c.NewMethodName, msgs[:len(c.Methods)]...)
+			if err != nil {
+				return "", nil, err
+			}
+
+			method = c.NewMethodName
+			results = append(results, &inputAndSigners{input, msgs[0].GetSigners()})
+			msgs = msgs[len(c.Methods):]
+			break
+		}
+	}
+
+	for _, m := range msgs {
+		t := reflect.TypeOf(m)
+		var ok bool
+		method, ok = messageMap[t]
+		if !ok {
+			return "", nil, errorsmod.Wrapf(sdkerrors.ErrUnknownRequest, "invalid message type %T", m)
+		}
+
+		input, err := packData(method, m)
+		if err != nil {
+			return "", nil, err
+		}
+
+		results = append(results, &inputAndSigners{input, m.GetSigners()})
+	}
+	return
 }
 
 func (cc *CosmosProvider) buildEvmMessages(
@@ -840,12 +1007,14 @@ func (cc *CosmosProvider) buildEvmMessages(
 	var txGasLimit uint64 = 0
 	contractAddress := common.HexToAddress(cc.PCfg.PrecompiledContractAddress)
 	blockNumber := new(big.Int)
-	for i, m := range txb.GetTx().GetMsgs() {
-		prefix, ok := messageMap[reflect.TypeOf(m)]
-		if !ok {
-			return nil, 0, sdk.Coins{}, errorsmod.Wrapf(sdkerrors.ErrUnknownRequest, "invalid message type %T", m)
-		}
-		signers := m.GetSigners()
+
+	_, inputs, err := extractMsgInputs(txb.GetTx().GetMsgs())
+	if err != nil {
+		return nil, 0, sdk.Coins{}, err
+	}
+
+	for i, is := range inputs {
+		signers := is.Signers
 		if len(signers) != 1 {
 			return nil, 0, sdk.Coins{}, errorsmod.Wrapf(sdkerrors.ErrUnknownRequest, "invalid signers length %d", len(signers))
 		}
@@ -853,14 +1022,9 @@ func (cc *CosmosProvider) buildEvmMessages(
 		if err != nil {
 			return nil, 0, sdk.Coins{}, err
 		}
-		input, err := proto.Marshal(m)
-		if err != nil {
-			return nil, 0, sdk.Coins{}, err
-		}
 		nonce := txf.Sequence() + uint64(i)
 		amount := big.NewInt(0)
-		input = addLengthPrefix(prefix, input)
-		tx := evmtypes.NewTx(chainID, nonce, &contractAddress, amount, gasLimit, gasFeeCap, gasPrice, gasTipCap, input, &ethtypes.AccessList{})
+		tx := evmtypes.NewTx(chainID, nonce, &contractAddress, amount, gasLimit, gasFeeCap, gasPrice, gasTipCap, is.Input, &ethtypes.AccessList{})
 		tx.From = from.Bytes()
 		if err := tx.ValidateBasic(); err != nil {
 			cc.log.Info("tx failed basic validation", zap.Error(err))
@@ -1902,6 +2066,9 @@ func (cc *CosmosProvider) PrepareFactory(txf tx.Factory, signingKey string) (tx.
 	if cc.PCfg.MinGasAmount != 0 {
 		txf = txf.WithGas(cc.PCfg.MinGasAmount)
 	}
+	if cc.PCfg.MaxGasAmount != 0 {
+		txf = txf.WithGas(cc.PCfg.MaxGasAmount)
+	}
 
 	if cc.PCfg.MaxGasAmount != 0 {
 		txf = txf.WithGas(cc.PCfg.MaxGasAmount)
@@ -1959,8 +2126,122 @@ func (cc *CosmosProvider) SetWithExtensionOptions(txf tx.Factory) (tx.Factory, e
 	return txf.WithExtensionOptions(extOpts...), nil
 }
 
+func (cc *CosmosProvider) calculateEvmGas(ctx context.Context, arg *evmtypes.TransactionArgs) (uint64, error) {
+	params, err := json.Marshal([]*evmtypes.TransactionArgs{arg})
+	if err != nil {
+		return 0, err
+	}
+	req := jsonrpcMessage{
+		Version: "2.0",
+		Method:  "eth_estimateGas",
+		Params:  params,
+		ID:      []byte("1"),
+	}
+
+	var gas uint64
+	if err = retry.Do(func() error {
+		var buf sysbytes.Buffer
+		err = json.NewEncoder(&buf).Encode(req)
+		if err != nil {
+			return err
+		}
+		resp, err := http.Post(cc.PCfg.JSONRPCAddr, "application/json", &buf)
+		if err != nil {
+			return err
+		}
+
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return fmt.Errorf("fail status %d", resp.StatusCode)
+		}
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+		var res jsonrpcMessage
+		if err = json.Unmarshal(data, &res); err != nil {
+			return err
+		}
+		if res.Error != nil {
+			return fmt.Errorf("res err %s", res.Error.Message)
+		}
+		gas = uint64(res.Result)
+		return nil
+	}, retry.Context(ctx), rtyAtt, rtyDel, rtyErr); err != nil {
+		return 0, err
+	}
+	return gas, nil
+}
+
 // CalculateGas simulates a tx to generate the appropriate gas settings before broadcasting a tx.
 func (cc *CosmosProvider) CalculateGas(ctx context.Context, txf tx.Factory, signingKey string, msgs ...sdk.Msg) (txtypes.SimulateResponse, uint64, error) {
+	if len(cc.PCfg.PrecompiledContractAddress) > 0 && len(cc.PCfg.JSONRPCAddr) > 0 {
+		to := common.HexToAddress(cc.PCfg.PrecompiledContractAddress)
+		chainID, err := ethermintcodecs.ParseChainID(cc.PCfg.ChainID)
+		if err != nil {
+			return txtypes.SimulateResponse{}, 0, err
+		}
+		gasPrices, err := convertCoins(cc.PCfg.GasPrices)
+		if err != nil {
+			return txtypes.SimulateResponse{}, 0, err
+		}
+		gasPrice := gasPrices[0].Amount.BigInt()
+
+		var gas uint64
+		chErr := make(chan error)
+		method, inputs, err := extractMsgInputs(msgs)
+		if err != nil {
+			return txtypes.SimulateResponse{}, 0, err
+		}
+
+		for i, is := range inputs {
+			go func(i int, is *inputAndSigners) {
+				signers := is.Signers
+				if len(signers) == 0 {
+					chErr <- fmt.Errorf("invalid signers length %d", len(signers))
+					return
+				}
+				from, err := convertAddress(signers[0].String())
+				if err != nil {
+					chErr <- err
+					return
+				}
+				data := hexutil.Bytes(is.Input)
+				nonce := hexutil.Uint64(txf.Sequence() + uint64(i))
+				arg := &evmtypes.TransactionArgs{
+					From:     from,
+					To:       &to,
+					GasPrice: (*hexutil.Big)(gasPrice),
+					Value:    (*hexutil.Big)(big.NewInt(0)),
+					Nonce:    &nonce,
+					Data:     &data,
+					ChainID:  (*hexutil.Big)(chainID),
+				}
+				g, err := cc.calculateEvmGas(ctx, arg)
+				cc.log.Info("calculatedEvmGas", zap.Uint64(method, g))
+				if err != nil {
+					chErr <- err
+					return
+				}
+				g, err = cc.AdjustEstimatedGas(g)
+				cc.log.Info("adjustedEvmGas", zap.Uint64(method, g))
+				if err != nil {
+					chErr <- err
+					return
+				}
+
+				atomic.AddUint64(&gas, g)
+				chErr <- nil
+			}(i, is)
+		}
+		for range inputs {
+			if err = <-chErr; err != nil {
+				return txtypes.SimulateResponse{}, 0, err
+			}
+		}
+		return txtypes.SimulateResponse{}, gas, err
+	}
+
 	keyInfo, err := cc.Keybase.Key(signingKey)
 	if err != nil {
 		return txtypes.SimulateResponse{}, 0, err
