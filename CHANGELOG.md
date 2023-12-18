@@ -31,6 +31,7 @@
 * [\#1324](https://github.com/cosmos/relayer/pull/1324) Add log-level in global config.
 * [\#1325](https://github.com/cosmos/relayer/pull/1325) Ignore only file not exist error when loadConfigFile.
 * [\#1326](https://github.com/cosmos/relayer/pull/1326) Avoid sending channel close confirm message after channel get closed successfully.
+* [\#](https://github.com/crypto-org-chain/relayer/pull/) Fix gasFeeCap and gasPrice when new evm tx.
 
 ## v0.9.3
 

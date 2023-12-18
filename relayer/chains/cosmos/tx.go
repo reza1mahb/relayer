@@ -1024,7 +1024,7 @@ func (cc *CosmosProvider) buildEvmMessages(
 		}
 		nonce := txf.Sequence() + uint64(i)
 		amount := big.NewInt(0)
-		tx := evmtypes.NewTx(chainID, nonce, &contractAddress, amount, gasLimit, gasFeeCap, gasPrice, gasTipCap, is.Input, &ethtypes.AccessList{})
+		tx := evmtypes.NewTx(chainID, nonce, &contractAddress, amount, gasLimit, gasPrice, gasFeeCap, gasTipCap, is.Input, &ethtypes.AccessList{})
 		tx.From = from.Bytes()
 		if err := tx.ValidateBasic(); err != nil {
 			cc.log.Info("tx failed basic validation", zap.Error(err))
