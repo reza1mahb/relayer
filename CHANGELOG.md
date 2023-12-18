@@ -32,6 +32,7 @@
 * [\#1325](https://github.com/cosmos/relayer/pull/1325) Ignore only file not exist error when loadConfigFile.
 * [\#1326](https://github.com/cosmos/relayer/pull/1326) Avoid sending channel close confirm message after channel get closed successfully.
 * [\#11](https://github.com/crypto-org-chain/relayer/pull/11) Fix gasFeeCap and gasPrice when new evm tx.
+* [\#1364](https://github.com/cosmos/relayer/pull/1364) Include feegrant message when calculate gas.
 
 ## v0.9.3
 
