@@ -671,16 +671,6 @@ func (cc *CosmosProvider) getTxFactoryAndBuilder(
 		txf = txf.WithSequence(sequence)
 	}
 
-	adjusted := gas
-
-	if gas == 0 {
-		_, adjusted, err = cc.CalculateGas(ctx, txf, txSignerKey, cMsgs...)
-
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
 	//Cannot feegrant your own TX
 	if txSignerKey != feegranterKey && feegranterKey != "" {
 		granterAddr, err := cc.GetKeyAddressForKey(feegranterKey)
@@ -689,6 +679,16 @@ func (cc *CosmosProvider) getTxFactoryAndBuilder(
 		}
 
 		txf = txf.WithFeeGranter(granterAddr)
+	}
+
+	adjusted := gas
+
+	if gas == 0 {
+		_, adjusted, err = cc.CalculateGas(ctx, txf, txSignerKey, cMsgs...)
+
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	// Set the gas amount on the transaction factory
