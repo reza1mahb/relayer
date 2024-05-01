@@ -12,15 +12,18 @@ Exported metrics:
 
 |              **Exported Metric**              	|                                                                                                        **Description**                                                                                                       	| **Type** 	|
 |:---------------------------------------------:	|:----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------:	|:--------:	|
-| cosmos_relayer_observed_packets               	| The total number of observed packets                                                                                                                                                                                         	|  Counter 	|
-| cosmos_relayer_relayed_packets                	| The total number of relayed packets                                                                                                                                                                                          	|  Counter 	|
+| cosmos_relayer_observed_packets_total             | The total number of observed packets                                                                                                                                                                                          |  Counter 	|
+| cosmos_relayer_relayed_packets_total              | The total number of relayed packets                                                                                                                                                                                           |  Counter 	|
 | cosmos_relayer_chain_latest_height            	| The current height of the chain                                                                                                                                                                                              	|   Gauge  	|
 | cosmos_relayer_wallet_balance                 	| The current balance for the relayer's wallet                                                                                                                                                                                 	|   Gauge  	|
 | cosmos_relayer_fees_spent                     	| The amount of fees spent from the relayer's wallet                                                                                                                                                                           	|   Gauge  	|
-| cosmos_relayer_tx_failure                     	| <br>The total number of tx failures broken up into categories:<br> - "packet messages are redundant"<br> - "insufficient funds"<br> - "invalid coins"<br> - "out of gas"<br><br><br>"Tx Failure" is the the catch all bucket 	|  Counter 	|
-| cosmos_relayer_block_query_errors_total       	| The total number of block query failures. The failures are separated into two categories:<br> - "RPC Client"<br> - "IBC Header"                                                                                              	| Counter  	|
-| cosmos_relayer_client_expiration_seconds      	| Seconds until the client expires                                                                                                                                                                                             	| Gauge    	|
-| cosmos_relayer_client_trusting_period_seconds 	| The trusting period (in seconds) of the client                                                                                                                                                                               	| Gauge    	|
+| cosmos_relayer_tx_failure                     	| <br>The total number of tx failures broken up into categories:<br> - "packet messages are redundant"<br> - "insufficient funds"<br> - "invalid coins"<br> - "out of gas"<br><br><br>"Tx Failure" is the the catch all bucket 	|   Counter |
+| cosmos_relayer_block_query_errors_total       	| The total number of block query failures. The failures are separated into two categories:<br> - "RPC Client"<br> - "IBC Header"                                                                                              	|   Counter |
+| cosmos_relayer_client_expiration_seconds      	| Seconds until the client expires                                                                                                                                                                                             	|   Gauge 	|
+| cosmos_relayer_client_trusting_period_seconds 	| The trusting period (in seconds) of the client                                                                                                                                                                               	|   Gauge   |
+| cosmos_relayer_unrelayed_packets                  | Current number of unrelayed packet sequences on a specific path and channel. This is updated after each flush (default is  5 min)                                                                                             |   Gauge   |
+| cosmos_relayer_unrelayed_acks                     | Current number of unrelayed acknowledgment sequences on a specific path and channel. This is updated after each flush (default is 5 min)                                                                                       |   Gauge   |
+
 
 
 
@@ -28,7 +31,7 @@ Exported metrics:
 
 ## Auto Update Light Client
 
-By default, the Relayer will automatically update clients (`MsgUpdateClient`) if the client has <= 1/3 of its trusting period left. 
+By default, the Relayer will automatically update clients (`MsgUpdateClient`) if the client has <= 1/3 of its trusting period left.
 
 > NOTE: The trusting period of the corresponding client is restored with each transaction a relayer relays. In other words, every time a relayer relays a message, it also sends a `MsgUpdateClient` message restarting the time to the clients expiration.*
 
@@ -46,8 +49,8 @@ Example:
 Selecting a time-threshold that is greater than 2/3 of the client trusting period will deem itself useless.
 
 Use cases for configuring the `--time-threshold` flag:
-- The underlying chain node that the relayer is using as an endpoint has restrictive pruning. Client updates are needed more frequently since states 2/3 trusting period ago would not be available due to pruning.  
-- Mitiage relayer operational errors allowing more frequent updates incase a relayer node goes down for > the client trusting period.
+- The underlying chain node that the relayer is using as an endpoint has restrictive pruning. Client updates are needed more frequently since states 2/3 trusting period ago would not be available due to pruning.
+- Mitiage relayer operational errors allowing more frequent updates in case a relayer node goes down for > the client trusting period.
 
 \* It is not mandatory for relayers to include the `MsgUpdateClient` when relaying packets, however most, if not all relayers currently do.
 
@@ -65,6 +68,10 @@ For example, configure feegrants for Kujira:
 - Note: above, `default` is the key that will need to contain funds (the granter)
 - 10 grantees will be configured, so those 10 address will sign TXs in round robin order.
 
+An external feegrant configuration can be applied with the following command:
+- `rly chains configure feegrant basicallowance cosmoshub cosmosaddr --grantees grantee3`
+- Note: above, `cosmosaddr` is a bech32 address that has already issued a feegrant allowance to `grantee3`.
+- External configuration means that someone else controls `cosmosaddr` (you do not need the mnemonic).
 
 You may also choose to specify the exact names of your grantees:
 - `rly chains configure feegrant basicallowance kujira default --grantees "kuji1,kuji2,kuji3"`
@@ -74,7 +81,6 @@ Rerunning the feegrant command will simply confirm your configuration is correct
 
 To remove the feegrant configuration:
 - `rly chains configure feegrant basicallowance kujira --delete`
-
 
 ## Stuck Packet
 

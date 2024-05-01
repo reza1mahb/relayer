@@ -119,10 +119,14 @@ func (cc *CosmosProvider) KeyAddOrRestore(keyName string, coinType uint32, signi
 		}
 	}
 
+	done := SetSDKConfigContext(cc.PCfg.AccountPrefix)
+
 	info, err := cc.Keybase.NewAccount(keyName, mnemonicStr, "", hd.CreateHDPath(coinType, 0, 0).String(), algo)
 	if err != nil {
 		return nil, err
 	}
+
+	done()
 
 	acc, err := info.GetAddress()
 	if err != nil {
@@ -222,7 +226,7 @@ func CreateMnemonic() (string, error) {
 }
 
 // EncodeBech32AccAddr returns the string bech32 representation for the specified account address.
-// It returns an empty sting if the byte slice is 0-length.
+// It returns an empty string if the byte slice is 0-length.
 // It returns an error if the bech32 conversion fails or the prefix is empty.
 func (cc *CosmosProvider) EncodeBech32AccAddr(addr sdk.AccAddress) (string, error) {
 	return sdk.Bech32ifyAddressBytes(cc.PCfg.AccountPrefix, addr)
@@ -251,6 +255,10 @@ func (cc *CosmosProvider) KeyFromKeyOrAddress(keyOrAddress string) (string, erro
 		if err != nil {
 			return "", err
 		}
+
+		done := SetSDKConfigContext(cc.PCfg.AccountPrefix)
+		defer done()
+
 		kr, err := cc.Keybase.KeyByAddress(acc)
 		if err != nil {
 			return "", err

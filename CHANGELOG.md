@@ -23,16 +23,15 @@
 * [\#1221](https://github.com/cosmos/relayer/pull/1221) Update cometbft to v0.37.2 and ibc-go to v7.2.0.
 * [\#1226](https://github.com/cosmos/relayer/pull/1226) Avoid invalid Bech32 prefix error in parallel tests when sdk Config get overwritten by each other in single process.
 * [\#1231](https://github.com/cosmos/relayer/pull/1231) Reduce get bech32 prefix when get signer.
-* [\#1225](https://github.com/cosmos/relayer/pull/1225) Support build EVM messages to allow signing Ethereum transactions.
-* [\#4](https://github.com/crypto-org-chain/relayer/pull/4) Avoid packet get relayed when estimated gas is higher than max gas.
-* [\#6](https://github.com/crypto-org-chain/relayer/pull/6) Support accurate estimate gas with eth_estimateGas for evm tx.
 * [\#1302](https://github.com/cosmos/relayer/pull/1302) Avoid packet get relayed when estimated gas is higher than max gas.
-* [\#1303](https://github.com/cosmos/relayer/pull/1303) Add missing max gas amount on txf to avoid estimate less gas when simualte runTx.
+* [\#1303](https://github.com/cosmos/relayer/pull/1303) Add missing max gas amount on txf to avoid estimate less gas when simulate runTx.
 * [\#1324](https://github.com/cosmos/relayer/pull/1324) Add log-level in global config.
 * [\#1325](https://github.com/cosmos/relayer/pull/1325) Ignore only file not exist error when loadConfigFile.
 * [\#1326](https://github.com/cosmos/relayer/pull/1326) Avoid sending channel close confirm message after channel get closed successfully.
-* [\#11](https://github.com/crypto-org-chain/relayer/pull/11) Fix gasFeeCap and gasPrice when new evm tx.
 * [\#1364](https://github.com/cosmos/relayer/pull/1364) Include feegrant message when calculate gas.
+* [\#1390](https://github.com/cosmos/relayer/pull/1390) Avoid no concrete type registered for type URL error of EthAccount.
+* [\#6](https://github.com/crypto-org-chain/relayer/pull/6) Support accurate estimate gas with eth_estimateGas for evm tx.
+* [\#11](https://github.com/crypto-org-chain/relayer/pull/11) Fix gasFeeCap and gasPrice when new evm tx.
 
 ## v0.9.3
 
@@ -140,7 +139,7 @@
 ### CLI/scripts
 
 * [\#412](https://github.com/cosmos/relayer/pull/412) Auto update clients to prevent expiry. `rly start` command supports auto updating a client if it is about to expire. Use the `--time-threshold` flag.
-* [\#323](https://github.com/cosmos/relayer/pull/323) Implmenet an API server. A rest server with API endpoints to support interacting with the relayer
+* [\#323](https://github.com/cosmos/relayer/pull/323) Implement an API server. A rest server with API endpoints to support interacting with the relayer
 * [\#406](https://github.com/cosmos/relayer/pull/406) Split `add-dir` into `add-chains` and `add-paths`. You must add a chain, then the keys, and then the paths. This enables support of bottom up validation.
 * [\#428](https://github.com/cosmos/relayer/pull/428) Fix add-paths failure when called on exiting configuration
 * [\#427](https://github.com/cosmos/relayer/pull/427) Fix nil paths bug which occurred when validating paths
@@ -157,5 +156,5 @@
 
 * (deps) Bump SDK version to [v0.41.0](https://github.com/cosmos/cosmos-sdk/releases/tag/v0.41.0).
 * Bug fixes and minor improvements
-* (relayer)[\#329](https://github.com/cosmos/relayer/issues/329) client, conenction, and channel handshake refactor (identifiers generated auto generated on-chain)
+* (relayer)[\#329](https://github.com/cosmos/relayer/issues/329) client, connection, and channel handshake refactor (identifiers generated auto generated on-chain)
 * (relayer)[\#386](https://github.com/cosmos/relayer/pull/386) client, connection and channel identifier reuse

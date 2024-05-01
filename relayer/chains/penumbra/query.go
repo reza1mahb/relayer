@@ -9,24 +9,24 @@ import (
 	"strings"
 	"time"
 
+	sdkerrors "cosmossdk.io/errors"
+	upgradetypes "cosmossdk.io/x/upgrade/types"
 	abci "github.com/cometbft/cometbft/abci/types"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	tmtypes "github.com/cometbft/cometbft/types"
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	querytypes "github.com/cosmos/cosmos-sdk/types/query"
 	bankTypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
-	upgradetypes "github.com/cosmos/cosmos-sdk/x/upgrade/types"
-	transfertypes "github.com/cosmos/ibc-go/v7/modules/apps/transfer/types"
-	clienttypes "github.com/cosmos/ibc-go/v7/modules/core/02-client/types"
-	conntypes "github.com/cosmos/ibc-go/v7/modules/core/03-connection/types"
-	chantypes "github.com/cosmos/ibc-go/v7/modules/core/04-channel/types"
-	commitmenttypes "github.com/cosmos/ibc-go/v7/modules/core/23-commitment/types"
-	host "github.com/cosmos/ibc-go/v7/modules/core/24-host"
-	ibcexported "github.com/cosmos/ibc-go/v7/modules/core/exported"
-	tmclient "github.com/cosmos/ibc-go/v7/modules/light-clients/07-tendermint"
+	transfertypes "github.com/cosmos/ibc-go/v8/modules/apps/transfer/types"
+	clienttypes "github.com/cosmos/ibc-go/v8/modules/core/02-client/types"
+	conntypes "github.com/cosmos/ibc-go/v8/modules/core/03-connection/types"
+	chantypes "github.com/cosmos/ibc-go/v8/modules/core/04-channel/types"
+	commitmenttypes "github.com/cosmos/ibc-go/v8/modules/core/23-commitment/types"
+	host "github.com/cosmos/ibc-go/v8/modules/core/24-host"
+	ibcexported "github.com/cosmos/ibc-go/v8/modules/core/exported"
+	tmclient "github.com/cosmos/ibc-go/v8/modules/light-clients/07-tendermint"
 	"github.com/cosmos/relayer/v2/relayer/chains"
 	"github.com/cosmos/relayer/v2/relayer/provider"
 	"go.uber.org/zap"
@@ -47,7 +47,7 @@ func (cc *PenumbraProvider) QueryTx(ctx context.Context, hashHex string) (*provi
 		return nil, err
 	}
 
-	events := parseEventsFromResponseDeliverTx(resp.TxResult)
+	events := parseEventsFromResponseDeliverTx(resp.TxResult.Events)
 
 	return &provider.RelayerTxResponse{
 		Height: resp.Height,
@@ -81,7 +81,7 @@ func (cc *PenumbraProvider) QueryTxs(ctx context.Context, page, limit int, event
 	// at most, one tx in the response. Because of this we don't want to initialize the slice with an initial size.
 	var txResps []*provider.RelayerTxResponse
 	for _, tx := range res.Txs {
-		relayerEvents := parseEventsFromResponseDeliverTx(tx.TxResult)
+		relayerEvents := parseEventsFromResponseDeliverTx(tx.TxResult.Events)
 		txResps = append(txResps, &provider.RelayerTxResponse{
 			Height: tx.Height,
 			TxHash: string(tx.Hash),
@@ -95,14 +95,15 @@ func (cc *PenumbraProvider) QueryTxs(ctx context.Context, page, limit int, event
 
 // parseEventsFromResponseDeliverTx parses the events from a ResponseDeliverTx and builds a slice
 // of provider.RelayerEvent's.
-func parseEventsFromResponseDeliverTx(resp abci.ResponseDeliverTx) []provider.RelayerEvent {
+func parseEventsFromResponseDeliverTx(resp []abci.Event) []provider.RelayerEvent {
 	var events []provider.RelayerEvent
 
-	for _, event := range resp.Events {
+	for _, event := range resp {
 		attributes := make(map[string]string)
 		for _, attribute := range event.Attributes {
-			attributes[string(attribute.Key)] = string(attribute.Value)
+			attributes[attribute.Key] = attribute.Value
 		}
+
 		events = append(events, provider.RelayerEvent{
 			EventType:  event.Type,
 			Attributes: attributes,
@@ -165,7 +166,7 @@ func (cc *PenumbraProvider) QueryTendermintProof(ctx context.Context, height int
 	// ABCI queries at heights 1, 2 or less than or equal to 0 are not supported.
 	// Base app does not support queries for height less than or equal to 1.
 	// Therefore, a query at height 2 would be equivalent to a query at height 3.
-	// A height of 0 will query with the lastest state.
+	// A height of 0 will query with the latest state.
 	if height != 0 && height <= 2 {
 		return nil, nil, clienttypes.Height{}, fmt.Errorf("proof queries at height <= 2 are not supported")
 	}
@@ -173,6 +174,8 @@ func (cc *PenumbraProvider) QueryTendermintProof(ctx context.Context, height int
 	if height != 0 {
 		height--
 	}
+
+	key = append([]byte("ibc-data/"), key...)
 
 	cc.log.Debug("Querying K/V", zap.String("ChainId", cc.ChainId()), zap.Int64("Height", height), zap.String("Key", string(key)))
 	req := abci.RequestQuery{
@@ -851,6 +854,10 @@ func (cc *PenumbraProvider) QueryDenomTraces(ctx context.Context, offset, limit 
 	return transfers.DenomTraces, nil
 }
 
+func (cc *PenumbraProvider) QueryDenomHash(ctx context.Context, trace string) (string, error) {
+	panic("not implemented")
+}
+
 func (cc *PenumbraProvider) QueryStakingParams(ctx context.Context) (*stakingtypes.Params, error) {
 	res, err := stakingtypes.NewQueryClient(cc).Params(ctx, &stakingtypes.QueryParamsRequest{})
 	if err != nil {
@@ -919,10 +926,11 @@ func (cc *PenumbraProvider) queryIBCMessages(ctx context.Context, log *zap.Logge
 	if err != nil {
 		return nil, err
 	}
+
 	var ibcMsgs []chains.IbcMessage
 	chainID := cc.ChainId()
 	for _, tx := range res.Txs {
-		ibcMsgs = append(ibcMsgs, chains.IbcMessagesFromEvents(log, tx.TxResult.Events, chainID, 0, true)...)
+		ibcMsgs = append(ibcMsgs, chains.IbcMessagesFromEvents(log, tx.TxResult.Events, chainID, 0)...)
 	}
 
 	return ibcMsgs, nil
