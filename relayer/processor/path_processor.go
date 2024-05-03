@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	chantypes "github.com/cosmos/ibc-go/v7/modules/core/04-channel/types"
-	ibcexported "github.com/cosmos/ibc-go/v7/modules/core/exported"
+	chantypes "github.com/cosmos/ibc-go/v8/modules/core/04-channel/types"
+	ibcexported "github.com/cosmos/ibc-go/v8/modules/core/exported"
 	"github.com/cosmos/relayer/v2/relayer/provider"
 	"go.uber.org/zap"
 )
@@ -32,17 +32,15 @@ const (
 	// Amount of time between flushes if the previous flush failed.
 	flushFailureRetry = 5 * time.Second
 
-	// If message assembly fails from either proof query failure on the source
-	// or assembling the message for the destination, how many blocks should pass
-	// before retrying.
-	blocksToRetryAssemblyAfter = 0
-
 	// If the message was assembled successfully, but sending the message failed,
 	// how many blocks should pass before retrying.
 	blocksToRetrySendAfter = 5
 
 	// How many times to retry sending a message before giving up on it.
 	maxMessageSendRetries = 5
+
+	// How many times to retry sending a message if channel is not opened.
+	maxMessageSendRetriesIfChannelNotOpen = 1
 
 	// How many blocks of history to retain ibc headers in the cache for.
 	ibcHeadersToCache = 10
@@ -79,7 +77,8 @@ type PathProcessor struct {
 	// true if this is a localhost IBC connection
 	isLocalhost bool
 
-	maxMsgs uint64
+	maxMsgs                    uint64
+	memoLimit, maxReceiverSize int
 
 	metrics *PrometheusMetrics
 }
@@ -105,6 +104,7 @@ func NewPathProcessor(
 	clientUpdateThresholdTime time.Duration,
 	flushInterval time.Duration,
 	maxMsgs uint64,
+	memoLimit, maxReceiverSize int,
 ) *PathProcessor {
 	isLocalhost := pathEnd1.ClientID == ibcexported.LocalhostClientID
 
@@ -119,6 +119,8 @@ func NewPathProcessor(
 		metrics:                   metrics,
 		isLocalhost:               isLocalhost,
 		maxMsgs:                   maxMsgs,
+		memoLimit:                 memoLimit,
+		maxReceiverSize:           maxReceiverSize,
 	}
 	if flushInterval == 0 {
 		pp.disablePeriodicFlush()
@@ -233,9 +235,9 @@ func (pp *PathProcessor) SetChainProviderIfApplicable(chainProvider provider.Cha
 
 func (pp *PathProcessor) IsRelayedChannel(chainID string, channelKey ChannelKey) bool {
 	if pp.pathEnd1.info.ChainID == chainID {
-		return pp.pathEnd1.info.ShouldRelayChannel(ChainChannelKey{ChainID: chainID, CounterpartyChainID: pp.pathEnd2.info.ChainID, ChannelKey: channelKey})
+		return pp.pathEnd1.ShouldRelayChannel(ChainChannelKey{ChainID: chainID, CounterpartyChainID: pp.pathEnd2.info.ChainID, ChannelKey: channelKey})
 	} else if pp.pathEnd2.info.ChainID == chainID {
-		return pp.pathEnd2.info.ShouldRelayChannel(ChainChannelKey{ChainID: chainID, CounterpartyChainID: pp.pathEnd1.info.ChainID, ChannelKey: channelKey})
+		return pp.pathEnd2.ShouldRelayChannel(ChainChannelKey{ChainID: chainID, CounterpartyChainID: pp.pathEnd1.info.ChainID, ChannelKey: channelKey})
 	}
 	return false
 }
@@ -297,7 +299,12 @@ func (pp *PathProcessor) HandleNewData(chainID string, cacheData ChainProcessorC
 func (pp *PathProcessor) handleFlush(ctx context.Context) {
 	flushTimer := pp.flushInterval
 	if err := pp.flush(ctx); err != nil {
-		pp.log.Warn("Flush not complete", zap.Error(err))
+		pp.log.Warn("Flush not complete",
+			zap.String("chain_id_1", pp.pathEnd1.chainProvider.ChainId()),
+			zap.String("client_id_1", pp.pathEnd1.info.ClientID),
+			zap.String("chain_id_2", pp.pathEnd2.chainProvider.ChainId()),
+			zap.String("client_id_2", pp.pathEnd2.info.ClientID),
+			zap.Error(err))
 		flushTimer = flushFailureRetry
 	}
 	pp.flushTimer.Stop()
@@ -317,17 +324,71 @@ func (pp *PathProcessor) processAvailableSignals(ctx context.Context, cancel fun
 			zap.Error(ctx.Err()),
 		)
 		return true
+	case t := <-pp.pathEnd1.finishedProcessing:
+		pp.pathEnd1.trackFinishedProcessingMessage(t)
+	case t := <-pp.pathEnd2.finishedProcessing:
+		pp.pathEnd2.trackFinishedProcessingMessage(t)
 	case d := <-pp.pathEnd1.incomingCacheData:
 		// we have new data from ChainProcessor for pathEnd1
-		pp.pathEnd1.mergeCacheData(ctx, cancel, d, pp.pathEnd2.info.ChainID, pp.pathEnd2.inSync, pp.messageLifecycle, pp.pathEnd2)
+		pp.pathEnd1.mergeCacheData(
+			ctx,
+			cancel,
+			d,
+			pp.pathEnd2.info.ChainID,
+			pp.pathEnd2.inSync,
+			pp.messageLifecycle,
+			pp.pathEnd2,
+			pp.memoLimit,
+			pp.maxReceiverSize,
+		)
 
 	case d := <-pp.pathEnd2.incomingCacheData:
 		// we have new data from ChainProcessor for pathEnd2
-		pp.pathEnd2.mergeCacheData(ctx, cancel, d, pp.pathEnd1.info.ChainID, pp.pathEnd1.inSync, pp.messageLifecycle, pp.pathEnd1)
+		pp.pathEnd2.mergeCacheData(
+			ctx,
+			cancel,
+			d,
+			pp.pathEnd1.info.ChainID,
+			pp.pathEnd1.inSync,
+			pp.messageLifecycle,
+			pp.pathEnd1,
+			pp.memoLimit,
+			pp.maxReceiverSize,
+		)
 
 	case <-pp.retryProcess:
 		// No new data to merge in, just retry handling.
 	case <-pp.flushTimer.C:
+		for len(pp.pathEnd1.incomingCacheData) > 0 {
+			d := <-pp.pathEnd1.incomingCacheData
+			// we have new data from ChainProcessor for pathEnd1
+			pp.pathEnd1.mergeCacheData(
+				ctx,
+				cancel,
+				d,
+				pp.pathEnd2.info.ChainID,
+				pp.pathEnd2.inSync,
+				pp.messageLifecycle,
+				pp.pathEnd2,
+				pp.memoLimit,
+				pp.maxReceiverSize,
+			)
+		}
+		for len(pp.pathEnd2.incomingCacheData) > 0 {
+			d := <-pp.pathEnd2.incomingCacheData
+			// we have new data from ChainProcessor for pathEnd2
+			pp.pathEnd2.mergeCacheData(
+				ctx,
+				cancel,
+				d,
+				pp.pathEnd1.info.ChainID,
+				pp.pathEnd1.inSync,
+				pp.messageLifecycle,
+				pp.pathEnd1,
+				pp.memoLimit,
+				pp.maxReceiverSize,
+			)
+		}
 		// Periodic flush to clear out any old packets
 		pp.handleFlush(ctx)
 	}
@@ -346,7 +407,7 @@ func (pp *PathProcessor) Run(ctx context.Context, cancel func()) {
 			return
 		}
 
-		for len(pp.pathEnd1.incomingCacheData) > 0 || len(pp.pathEnd2.incomingCacheData) > 0 || len(pp.retryProcess) > 0 {
+		for len(pp.pathEnd1.incomingCacheData) > 0 || len(pp.pathEnd2.incomingCacheData) > 0 || len(pp.retryProcess) > 0 || len(pp.pathEnd1.finishedProcessing) > 0 || len(pp.pathEnd2.finishedProcessing) > 0 {
 			// signals are available, so this will not need to block.
 			if pp.processAvailableSignals(ctx, cancel) {
 				return
