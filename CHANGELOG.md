@@ -33,6 +33,7 @@
 * [\#6](https://github.com/crypto-org-chain/relayer/pull/6) Support accurate estimate gas with eth_estimateGas for evm tx.
 * [\#11](https://github.com/crypto-org-chain/relayer/pull/11) Fix gasFeeCap and gasPrice when new evm tx.
 * [\#1455](https://github.com/cosmos/relayer/pull/1455) Allow retry for pathEnd to avoid packet message get removed before open channel.
+* [\#14](https://github.com/crypto-org-chain/relayer/pull/14) Support batch EVM transactions.
 
 ## v0.9.3
 
