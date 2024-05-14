@@ -13,6 +13,7 @@ import (
 	clienttypes "github.com/cosmos/ibc-go/v8/modules/core/02-client/types"
 	chantypes "github.com/cosmos/ibc-go/v8/modules/core/04-channel/types"
 	"github.com/cosmos/relayer/v2/relayer/provider"
+	evmtypes "github.com/evmos/ethermint/x/evm/types"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -178,6 +179,8 @@ func getFeePayer(log *zap.Logger, cdc *codec.ProtoCodec, tx *typestx.Tx) string 
 		return firstMsg.Signer
 	case *feetypes.MsgPayPacketFeeAsync:
 		return firstMsg.PacketFee.RefundAddress
+	case *evmtypes.MsgEthereumTx:
+		return sdk.AccAddress(firstMsg.From).String()
 	default:
 		signers, _, err := cdc.GetMsgV1Signers(firstMsg)
 		if err != nil {
