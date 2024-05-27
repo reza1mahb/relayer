@@ -16,7 +16,7 @@ func RegisterInterfaces(registry codectypes.InterfaceRegistry) {
 	registry.RegisterImplementations((*cryptotypes.PrivKey)(nil), &PrivKey{})
 
 	registry.RegisterImplementations(
-		(*authtypes.AccountI)(nil),
+		(*sdk.AccountI)(nil),
 		&etherminttypes.EthAccount{},
 	)
 	registry.RegisterImplementations(
