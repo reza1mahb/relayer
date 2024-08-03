@@ -2,4 +2,4 @@
 skip = *.pulsar.go,*.pb.go,*.pb.gw.go,*.json,*.git,*.bin,*.sum,*.mod,query_test.go
 ignore-words-list = usera
 count =
-quiet-level = 3
+quiet-level =76
